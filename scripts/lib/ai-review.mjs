@@ -172,6 +172,8 @@ export function buildReviewMessages({ candidate, repository, readme, licenseText
         "kind.value 只能是 mcp、skill、plugin、unknown。",
         "useCases 每项必须且只能包含 value、basis、evidenceUrl，禁止使用 title、description、name 等其他字段。",
         "compatibility 每项必须且只能包含 platform、status、basis、evidenceUrl、note；证据不足时直接返回空数组。",
+        "compatibility.platform 必须是小写英文 slug（例如 claude-code），不要输出中文平台名。",
+        "risks 每项必须且只能包含 level、title、basis、evidenceUrl；没有可验证风险时返回空数组。",
         `严格按以下 JSON 结构返回，不增加字段：${JSON.stringify(example)}`,
       ].join("\n"),
     },

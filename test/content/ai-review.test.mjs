@@ -238,6 +238,40 @@ test("模型首次返回错误字段时按 Schema 反馈自动修正一次", asy
   assert.match(calls[1].at(-1).content, /compatibility.*platform.*status/);
 });
 
+test("模型第二次仍漂移的兼容性和风险字段会被保守归一化", async () => {
+  const sectionDrift = {
+    ...VALID_REPORT,
+    compatibility: [{ platform: "Claude Desktop 中文", status: "supported", description: "可通过 MCP 使用" }],
+    risks: [{ severity: "high", risk: "需要配置本地文件权限" }],
+  };
+  const client = {
+    async complete() {
+      return { report: sectionDrift, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+    },
+  };
+  const result = await completeValidatedReview({
+    client,
+    messages: [{ role: "system", content: "schema" }],
+    readme: LATEST_README,
+    candidate: { candidateId: VALID_REPORT.candidateId, repository: VALID_REPORT.repository },
+  });
+  assert.equal(result.validationAttempts, 2);
+  assert.equal(result.normalized, true);
+  assert.deepEqual(result.report.compatibility, [{
+    platform: "claude-desktop",
+    status: "unknown",
+    basis: "unknown",
+    evidenceUrl: null,
+    note: "可通过 MCP 使用",
+  }]);
+  assert.deepEqual(result.report.risks, [{
+    level: "high",
+    title: "需要配置本地文件权限",
+    basis: "unknown",
+    evidenceUrl: null,
+  }]);
+});
+
 test("资格校验不因 needs_human、缺失信息、兼容性或实用性空缺而阻断", () => {
   const report = {
     ...VALID_REPORT,

@@ -81,6 +81,59 @@ function addUsage(total, usage) {
   };
 }
 
+const REVIEW_BASIS = new Set(["github_api", "upstream", "ai_summary", "unknown"]);
+const COMPATIBILITY_STATUS = new Set(["native", "supported", "partial", "unsupported", "unknown"]);
+const RISK_LEVEL = new Set(["low", "medium", "high"]);
+
+function basisFields(item) {
+  const requestedBasis = REVIEW_BASIS.has(item?.basis) ? item.basis : "unknown";
+  const hasEvidence = typeof item?.evidenceUrl === "string" && item.evidenceUrl.startsWith("https://");
+  const basis = ["github_api", "upstream"].includes(requestedBasis) && !hasEvidence ? "unknown" : requestedBasis;
+  const evidenceUrl = basis === "unknown" || basis === "ai_summary" ? null : item.evidenceUrl;
+  return { basis, evidenceUrl };
+}
+
+function shortText(...values) {
+  const value = values.find((item) => typeof item === "string" && item.trim().length > 0);
+  return value?.trim() ?? null;
+}
+
+function platformSlug(value) {
+  const slug = String(value ?? "")
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/-+$/g, "");
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ? slug : null;
+}
+
+export function normalizeNonBlockingReviewSections(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const useCases = Array.isArray(value.useCases) ? value.useCases.flatMap((item) => {
+    const text = shortText(item?.value, item?.description, item?.title, item?.name);
+    return text ? [{ value: text.slice(0, 300), ...basisFields(item) }] : [];
+  }).slice(0, 8) : [];
+  const compatibility = Array.isArray(value.compatibility) ? value.compatibility.flatMap((item) => {
+    const platform = platformSlug(item?.platform ?? item?.name);
+    if (!platform) return [];
+    const evidence = basisFields(item);
+    const requestedStatus = COMPATIBILITY_STATUS.has(item?.status) ? item.status : "unknown";
+    const status = ["github_api", "upstream"].includes(evidence.basis) ? requestedStatus : "unknown";
+    const note = shortText(item?.note, item?.description, "证据不足。");
+    return [{ platform, status, ...evidence, note: note.length >= 2 ? note.slice(0, 240) : "证据不足。" }];
+  }).slice(0, 12) : [];
+  const risks = Array.isArray(value.risks) ? value.risks.flatMap((item) => {
+    const title = shortText(item?.title, item?.risk, item?.description, item?.name);
+    if (!title || title.length < 2) return [];
+    const levelCandidate = item?.level ?? item?.severity;
+    const level = RISK_LEVEL.has(levelCandidate) ? levelCandidate : "medium";
+    return [{ level, title: title.slice(0, 160), ...basisFields(item) }];
+  }).slice(0, 12) : [];
+  return { ...value, useCases, compatibility, risks };
+}
+
 export async function completeValidatedReview({ client, messages, readme, candidate, maxValidationAttempts = 2 }) {
   let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   let lastError;
@@ -93,6 +146,7 @@ export async function completeValidatedReview({ client, messages, readme, candid
         "kind.value 只能是 mcp、skill、plugin、unknown。",
         "useCases 每项只能包含 value、basis、evidenceUrl。",
         "compatibility 每项必须且只能包含 platform、status、basis、evidenceUrl、note；证据不足可返回空数组。",
+        "risks 每项必须且只能包含 level、title、basis、evidenceUrl；没有可验证风险可返回空数组。",
         "不要增加任何字段，不要输出 Markdown。",
       ].join("\n"),
     }];
@@ -106,7 +160,14 @@ export async function completeValidatedReview({ client, messages, readme, candid
       return { report, usage, validationAttempts: attempt };
     } catch (error) {
       lastError = error;
-      if (attempt === maxValidationAttempts) throw error;
+      if (attempt === maxValidationAttempts) {
+        const normalized = normalizeNonBlockingReviewSections(result.report);
+        const report = validateReviewReport(normalized, { readme });
+        if (report.candidateId !== candidate.candidateId || report.repository !== candidate.repository) {
+          throw new Error("Invalid review report: candidate identity changed by model");
+        }
+        return { report, usage, validationAttempts: attempt, normalized: true };
+      }
     }
   }
   throw lastError;
