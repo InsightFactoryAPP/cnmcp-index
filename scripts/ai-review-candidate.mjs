@@ -84,6 +84,7 @@ function addUsage(total, usage) {
 const REVIEW_BASIS = new Set(["github_api", "upstream", "ai_summary", "unknown"]);
 const COMPATIBILITY_STATUS = new Set(["native", "supported", "partial", "unsupported", "unknown"]);
 const RISK_LEVEL = new Set(["low", "medium", "high"]);
+const MAINTENANCE_STATUS = new Set(["active", "inactive", "archived", "unknown"]);
 
 function basisFields(item) {
   const requestedBasis = REVIEW_BASIS.has(item?.basis) ? item.basis : "unknown";
@@ -109,7 +110,7 @@ function platformSlug(value) {
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ? slug : null;
 }
 
-export function normalizeNonBlockingReviewSections(value) {
+export function normalizeReviewReportShape(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const useCases = Array.isArray(value.useCases) ? value.useCases.flatMap((item) => {
     const text = shortText(item?.value, item?.description, item?.title, item?.name);
@@ -131,7 +132,49 @@ export function normalizeNonBlockingReviewSections(value) {
     const level = RISK_LEVEL.has(levelCandidate) ? levelCandidate : "medium";
     return [{ level, title: title.slice(0, 160), ...basisFields(item) }];
   }).slice(0, 12) : [];
-  return { ...value, useCases, compatibility, risks };
+  const scopeEvidence = {
+    ...basisFields(value.scopeEvidence),
+    evidenceExcerpt: shortText(value.scopeEvidence?.evidenceExcerpt)?.slice(0, 300) ?? null,
+  };
+  const kind = {
+    value: value.kind?.value,
+    ...basisFields(value.kind),
+    evidenceExcerpt: shortText(value.kind?.evidenceExcerpt)?.slice(0, 300) ?? null,
+  };
+  const license = {
+    value: shortText(value.license?.value, "unknown").slice(0, 300),
+    ...basisFields(value.license),
+  };
+  const maintenanceEvidence = basisFields(value.maintenance);
+  const maintenance = {
+    status: MAINTENANCE_STATUS.has(value.maintenance?.status) ? value.maintenance.status : "unknown",
+    ...maintenanceEvidence,
+    note: shortText(value.maintenance?.note, value.maintenance?.description, "证据不足。").slice(0, 240),
+  };
+  const stringList = (items, maximum, length) => Array.isArray(items)
+    ? [...new Set(items.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean))]
+        .slice(0, maximum)
+        .map((item) => item.slice(0, length))
+    : [];
+  return {
+    schemaVersion: value.schemaVersion,
+    candidateId: value.candidateId,
+    repository: value.repository,
+    inScope: value.inScope,
+    scopeEvidence,
+    kind,
+    summaryZh: value.summaryZh,
+    suggestedTags: stringList(value.suggestedTags, 12, 64),
+    targetUsers: stringList(value.targetUsers, 8, 100),
+    useCases,
+    license,
+    maintenance,
+    compatibility,
+    risks,
+    missingInformation: stringList(value.missingInformation, 12, 160),
+    recommendation: value.recommendation,
+    recommendationReason: value.recommendationReason,
+  };
 }
 
 export async function completeValidatedReview({ client, messages, readme, candidate, maxValidationAttempts = 2 }) {
@@ -147,6 +190,7 @@ export async function completeValidatedReview({ client, messages, readme, candid
         "useCases 每项只能包含 value、basis、evidenceUrl。",
         "compatibility 每项必须且只能包含 platform、status、basis、evidenceUrl、note；证据不足可返回空数组。",
         "risks 每项必须且只能包含 level、title、basis、evidenceUrl；没有可验证风险可返回空数组。",
+        "license 只能包含 value、basis、evidenceUrl；maintenance 只能包含 status、basis、evidenceUrl、note。",
         "不要增加任何字段，不要输出 Markdown。",
       ].join("\n"),
     }];
@@ -161,7 +205,7 @@ export async function completeValidatedReview({ client, messages, readme, candid
     } catch (error) {
       lastError = error;
       if (attempt === maxValidationAttempts) {
-        const normalized = normalizeNonBlockingReviewSections(result.report);
+        const normalized = normalizeReviewReportShape(result.report);
         const report = validateReviewReport(normalized, { readme });
         if (report.candidateId !== candidate.candidateId || report.repository !== candidate.repository) {
           throw new Error("Invalid review report: candidate identity changed by model");

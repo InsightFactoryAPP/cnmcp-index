@@ -238,9 +238,12 @@ test("模型首次返回错误字段时按 Schema 反馈自动修正一次", asy
   assert.match(calls[1].at(-1).content, /compatibility.*platform.*status/);
 });
 
-test("模型第二次仍漂移的兼容性和风险字段会被保守归一化", async () => {
+test("模型第二次仍漂移的维护、兼容性和风险字段会被保守归一化", async () => {
   const sectionDrift = {
     ...VALID_REPORT,
+    inventedRootField: true,
+    license: { ...VALID_REPORT.license, source: "GitHub" },
+    maintenance: { ...VALID_REPORT.maintenance, lastCommit: "today", stars: 100 },
     compatibility: [{ platform: "Claude Desktop 中文", status: "supported", description: "可通过 MCP 使用" }],
     risks: [{ severity: "high", risk: "需要配置本地文件权限" }],
   };
@@ -257,6 +260,9 @@ test("模型第二次仍漂移的兼容性和风险字段会被保守归一化",
   });
   assert.equal(result.validationAttempts, 2);
   assert.equal(result.normalized, true);
+  assert.equal("inventedRootField" in result.report, false);
+  assert.deepEqual(result.report.license, VALID_REPORT.license);
+  assert.deepEqual(result.report.maintenance, VALID_REPORT.maintenance);
   assert.deepEqual(result.report.compatibility, [{
     platform: "claude-desktop",
     status: "unknown",
