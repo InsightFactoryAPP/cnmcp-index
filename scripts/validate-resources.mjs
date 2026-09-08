@@ -288,6 +288,7 @@ export async function validateCatalog(options = {}) {
   const resources = [];
   const ids = new Map();
   const repositories = new Map();
+  const names = new Map();
   for (const entry of directoryEntries) {
     const resourceDirectory = path.join(resourcesDirectory, entry.name);
     const resourceFile = path.join(resourceDirectory, "resource.json");
@@ -302,6 +303,13 @@ export async function validateCatalog(options = {}) {
         const previous = ids.get(resource.id);
         errors.push(validationMessage(resourceId, resourceFile, "$.id", `资源 ID 与 ${displayPath(previous, projectRoot)} 冲突`, projectRoot));
       } else ids.set(resource.id, resourceFile);
+    }
+    if (typeof resource.name === "string") {
+      const normalizedName = resource.name.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+      if (names.has(normalizedName)) {
+        const previous = names.get(normalizedName);
+        errors.push(validationMessage(resourceId, resourceFile, "$.name", `资源名称与 ${previous.resourceId}（${displayPath(previous.filePath, projectRoot)}）冲突`, projectRoot));
+      } else names.set(normalizedName, { resourceId, filePath: resourceFile });
     }
 
     for (const field of ["repository", "homepage", "documentation"]) {

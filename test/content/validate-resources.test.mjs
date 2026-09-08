@@ -181,6 +181,13 @@ test("重复资源 ID、规范化源码和资源内平台声明被拒绝", async
       await writeJson(resource.filePath, resource.value);
     }, [/\[beta-skill\].*\$\.repository:/, /规范化源码地址与 alpha-mcp/]));
 
+  await t.test("规范化名称重复", () =>
+    expectInvalid(async (root) => {
+      const resource = await readResource(root, "beta-skill");
+      resource.value.name = "  阿尔法   MCP  ";
+      await writeJson(resource.filePath, resource.value);
+    }, [/\[beta-skill\].*\$\.name:/, /资源名称与 alpha-mcp/]));
+
   await t.test("同一资源重复平台", () =>
     expectInvalid(async (root) => {
       const resource = await readResource(root, "gamma-plugin");

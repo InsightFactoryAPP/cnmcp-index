@@ -2,7 +2,9 @@ name: AI Candidate Review
 
 on:
   issues:
-    types: [labeled]
+    types: [opened, reopened]
+  schedule:
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       issue_number:
@@ -20,14 +22,45 @@ permissions:
   issues: write
 
 concurrency:
-  group: ai-review-${{ github.event.issue.number || inputs.issue_number }}
+  group: ai-resource-pipeline
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      contains(github.event.issue.labels.*.name, 'auto-discovery')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      issue_number: ${{ steps.candidate.outputs.issue_number }}
+      bot_login: ${{ steps.candidate.outputs.bot_login }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.14.0"
+
+      - name: Verify trusted Discovery Issue
+        id: candidate
+        env:
+          AI_REVIEW_ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number || '' }}
+          CNMCP_BOT_TOKEN: ${{ secrets.CNMCP_BOT_TOKEN }}
+        run: node scripts/preflight-ai-candidate.mjs
+
   review:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ai-review'
+    needs: preflight
+    if: needs.preflight.outputs.issue_number != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      prepared: ${{ steps.ai-review.outputs.prepared }}
     steps:
       - name: Checkout default branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -48,9 +81,12 @@ jobs:
         run: node .yarn/releases/yarn-1.22.19.cjs generate:catalog
 
       - name: Review candidate and update Issue report
+        id: ai-review
         env:
-          AI_REVIEW_ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          AI_REVIEW_ISSUE_NUMBER: ${{ needs.preflight.outputs.issue_number }}
+          AI_REVIEW_OUTPUT_PATH: ${{ runner.temp }}/ai-resource.json
           AI_REVIEW_FORCE: ${{ inputs.force || false }}
+          CNMCP_BOT_LOGIN: ${{ needs.preflight.outputs.bot_login }}
           AI_REVIEW_TIMEOUT_MS: "180000"
           AI_REVIEW_MAX_TOKENS: "6000"
           AI_REVIEW_MAX_ATTEMPTS: "2"
@@ -59,3 +95,41 @@ jobs:
           DEEPSEEK_MODEL: deepseek-v4-flash
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/ai-review-candidate.mjs
+
+      - name: Record bounded review failure
+        if: failure() && steps.ai-review.outcome == 'failure'
+        env:
+          AI_REVIEW_ISSUE_NUMBER: ${{ needs.preflight.outputs.issue_number }}
+          CNMCP_BOT_LOGIN: ${{ needs.preflight.outputs.bot_login }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/record-ai-review-failure.mjs
+
+  publish:
+    needs: [preflight, review]
+    if: needs.review.outputs.prepared != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.14.0"
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Install locked dependencies
+        run: node .yarn/releases/yarn-1.22.19.cjs install --frozen-lockfile --non-interactive
+
+      - name: Generate deterministic catalogs
+        run: node .yarn/releases/yarn-1.22.19.cjs generate:catalog
+
+      - name: Publish eligible resource Pull Request
+        env:
+          AI_REVIEW_PAYLOAD_BASE64: ${{ needs.review.outputs.prepared }}
+          CNMCP_BOT_TOKEN: ${{ secrets.CNMCP_BOT_TOKEN }}
+        run: node scripts/publish-ai-resource.mjs

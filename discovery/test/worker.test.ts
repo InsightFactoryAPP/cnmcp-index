@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runDiscoveryCrawl, startDailyCrawl } from "../src/crawl";
+import { promoteNewCandidates, runDiscoveryCrawl, startDailyCrawl } from "../src/crawl";
 import { handleRequest } from "../src/index";
 
 const ORIGIN = "https://www.cnmcp.com";
@@ -31,6 +31,20 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   await clearDatabase();
 });
+
+async function insertPromotionCandidate(repoFullName = "acme/files-mcp"): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO candidates (
+       repo_full_name, html_url, name, description, stars, forks, language, license,
+       topics, kind, inferred_platforms, score, pushed_at, sources, catalog_id,
+       promotion_status, issue_number, first_seen_at, last_crawled_at
+     ) VALUES (?1, ?2, 'files-mcp', 'File tools', 120, 3, 'TypeScript', 'MIT',
+       '["mcp-server"]', 'mcp', '[]', 40, '2026-08-01T00:00:00.000Z', '["github-search"]',
+       NULL, 'none', NULL, 1, ?3)`,
+  )
+    .bind(repoFullName, `https://github.com/${repoFullName}`, NOW)
+    .run();
+}
 
 describe("CORS 与 GET /v1/discovery", () => {
   it("允许配置 Origin 的预检并对所有响应禁用缓存", async () => {
@@ -67,6 +81,66 @@ describe("CORS 与 GET /v1/discovery", () => {
 });
 
 describe("发现列表与爬取写入", () => {
+  it("发布候选前读取 README 快照，并把受管快照放进 Issue", async () => {
+    await insertPromotionCandidate();
+    const requests: string[] = [];
+    let issueBody = "";
+    const readme = "# Files MCP\n\nPublic upstream documentation.";
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith("/repos/acme/files-mcp/readme")) {
+        return jsonResponse({
+          sha: "d".repeat(40),
+          html_url: "https://github.com/acme/files-mcp/blob/main/README.md",
+          encoding: "base64",
+          size: Buffer.byteLength(readme),
+          content: Buffer.from(readme).toString("base64"),
+        });
+      }
+      if (url.endsWith("/repos/burgleaf/cnmcp-index/issues") && init?.method === "POST") {
+        issueBody = String(JSON.parse(String(init.body)).body);
+        return jsonResponse({ number: 88 }, 201);
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const issued = await promoteNewCandidates(env, { fetch: fetchImpl, sleep: async () => undefined, now: NOW });
+
+    expect(issued).toBe(1);
+    expect(requests).toEqual([
+      "https://api.github.com/repos/acme/files-mcp/readme",
+      "https://api.github.com/repos/burgleaf/cnmcp-index/issues",
+    ]);
+    expect(issueBody).toContain("<!-- cnmcp-managed: readme-snapshot-v1:start -->");
+    expect(issueBody).toContain("<!-- cnmcp-managed: readme-snapshot-v1:end -->");
+    expect(issueBody).toContain("\\# Files MCP");
+    const promotion = await env.DB.prepare("SELECT issue_number AS n FROM promotions WHERE repo_full_name = 'acme/files-mcp'").first<{ n: number }>();
+    expect(promotion?.n).toBe(88);
+  });
+
+  it("README 缺失或读取失败时不创建 Issue，也不把候选标成已发布", async () => {
+    for (const mode of ["missing", "network"] as const) {
+      await clearDatabase();
+      await insertPromotionCandidate();
+      let issuePosts = 0;
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/repos/acme/files-mcp/readme")) {
+          if (mode === "network") throw new Error("network");
+          return new Response("missing", { status: 404 });
+        }
+        if (url.endsWith("/issues") && init?.method === "POST") issuePosts += 1;
+        return new Response("not found", { status: 404 });
+      };
+
+      await expect(promoteNewCandidates(env, { fetch: fetchImpl, sleep: async () => undefined, now: NOW })).resolves.toBe(0);
+      expect(issuePosts).toBe(0);
+      const promotion = await env.DB.prepare("SELECT COUNT(*) AS n FROM promotions WHERE repo_full_name = 'acme/files-mcp'").first<{ n: number }>();
+      expect(promotion?.n).toBe(0);
+    }
+  });
+
   it("爬取结果可按 kind 过滤，generatedAt 来自成功 crawl_runs，且响应不含内部 sources 字段", async () => {
     const fetchImpl: typeof fetch = async (input) => {
       const url = String(input);

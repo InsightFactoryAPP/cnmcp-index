@@ -17,6 +17,7 @@ import { enrichGithubRepo, GITHUB_SEARCH_QUERIES, searchGithubRepositories } fro
 import { fetchMcpRegistry, type FetchLike } from "./sources/mcp-registry";
 import type { CandidateRecord, CrawlStats } from "./types";
 import { createGithubIssue } from "./promote";
+import { fetchGithubReadmeSnapshot } from "./readme-snapshot";
 
 export type CrawlRuntime = Readonly<{
   fetch: FetchLike;
@@ -192,7 +193,9 @@ export async function promoteNewCandidates(env: WorkerEnv, runtime: CrawlRuntime
   let issued = 0;
   for (const candidate of promotions) {
     await runtime.sleep(1_000);
-    const issueNumber = await createGithubIssue(runtime.fetch, token, env.CATALOG_REPOSITORY, candidate);
+    const readme = await fetchGithubReadmeSnapshot(runtime.fetch, token, candidate.repoFullName, runtime.now);
+    if (!readme) continue;
+    const issueNumber = await createGithubIssue(runtime.fetch, token, env.CATALOG_REPOSITORY, candidate, readme);
     if (issueNumber) {
       await markIssued(env.DB, candidate.repoFullName, issueNumber, runtime.now);
       issued += 1;

@@ -8,6 +8,7 @@ import {
   parseCandidateIssue,
   validateReviewReport,
 } from "../../scripts/lib/ai-review.mjs";
+import { evaluateResourceQualification } from "../../scripts/lib/ai-resource-qualification.mjs";
 import { createDeepSeekClient } from "../../scripts/lib/deepseek-client.mjs";
 import { upsertReviewComment } from "../../scripts/lib/github-ai-review.mjs";
 
@@ -30,11 +31,23 @@ mcp-registry、github-search
 `;
 
 const VALID_REPORT = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   candidateId: "github:acme/files-mcp",
   repository: "https://github.com/acme/files-mcp",
-  kind: { value: "mcp", basis: "upstream", evidenceUrl: "https://github.com/acme/files-mcp#readme" },
+  inScope: true,
+  scopeEvidence: {
+    basis: "upstream",
+    evidenceUrl: "https://github.com/acme/files-mcp#readme",
+    evidenceExcerpt: "MCP server that gives agents restricted access to project files",
+  },
+  kind: {
+    value: "mcp",
+    basis: "upstream",
+    evidenceUrl: "https://github.com/acme/files-mcp#readme",
+    evidenceExcerpt: "MCP server that gives agents restricted access to project files",
+  },
   summaryZh: "为智能体提供受限文件读取能力的 MCP 服务。",
+  suggestedTags: ["developer", "automation"],
   targetUsers: ["需要本地文件上下文的开发者"],
   useCases: [
     {
@@ -65,15 +78,40 @@ const VALID_REPORT = {
   recommendationReason: "用途和许可证有证据，但兼容性仍需人工核验。",
 };
 
+const LATEST_README = `# Files MCP\n\nMCP server that gives agents restricted access to project files.\n`;
+
+const VALID_PROPOSAL = {
+  schemaVersion: 1,
+  candidateId: "github:acme/files-mcp",
+  repository: "https://github.com/acme/files-mcp",
+  id: "files-mcp",
+  name: "Files MCP",
+  summary: "为智能体提供受限项目文件读取能力的 MCP 服务。",
+  tags: ["file-management", "mcp"],
+  targetUsers: ["需要向智能体提供项目上下文的开发者"],
+  capabilities: ["在明确边界内读取项目文件"],
+  usageNotes: [],
+};
+
+const PUBLIC_REPOSITORY = {
+  htmlUrl: "https://github.com/acme/files-mcp",
+  private: false,
+  disabled: false,
+  archived: false,
+  license: "MIT",
+};
+
 test("候选 Issue 解析并规范化 GitHub 仓库标识", () => {
   assert.deepEqual(parseCandidateIssue(ISSUE_BODY), {
     candidateId: "github:acme/files-mcp",
     repository: "https://github.com/acme/files-mcp",
     repoFullName: "acme/files-mcp",
-    declaredKind: "mcp",
+    declaredKindHint: "MCP",
     sources: ["mcp-registry", "github-search"],
     crawledAt: "2026-09-02T01:02:03.000Z",
   });
+  const negativeHint = parseCandidateIssue(ISSUE_BODY.replace("\nMCP\n", "\nThis is not an MCP server\n"));
+  assert.equal(negativeHint.declaredKindHint, "This is not an MCP server");
   assert.throws(() => parseCandidateIssue("### 源码地址\nhttp://127.0.0.1/private"), /GitHub HTTPS/);
 });
 
@@ -89,8 +127,8 @@ test("确定性查重优先于模型判断", () => {
   });
 });
 
-test("审核协议要求事实证据并拒绝额外字段", () => {
-  assert.deepEqual(validateReviewReport(VALID_REPORT), VALID_REPORT);
+test("v2 审核协议要求范围和类型证据可在最新 README 中复核", () => {
+  assert.deepEqual(validateReviewReport(VALID_REPORT, { readme: LATEST_README }), VALID_REPORT);
   assert.throws(
     () => validateReviewReport({ ...VALID_REPORT, inventedScore: 99 }),
     /invalid review report/i,
@@ -119,6 +157,36 @@ test("审核协议要求事实证据并拒绝额外字段", () => {
       }),
     /invalid review report/i,
   );
+  assert.throws(
+    () =>
+      validateReviewReport(
+        {
+          ...VALID_REPORT,
+          kind: { ...VALID_REPORT.kind, evidenceExcerpt: "an invented classification claim" },
+        },
+        { readme: LATEST_README },
+      ),
+    /evidence excerpt/i,
+  );
+  assert.throws(
+    () =>
+      validateReviewReport({
+        ...VALID_REPORT,
+        scopeEvidence: { ...VALID_REPORT.scopeEvidence, evidenceUrl: "https://evil.example/readme" },
+      }),
+    /invalid review report/i,
+  );
+  assert.throws(
+    () =>
+      validateReviewReport({
+        ...VALID_REPORT,
+        scopeEvidence: {
+          ...VALID_REPORT.scopeEvidence,
+          evidenceUrl: "https://api.github.com/repos/acme/files-mcp-evil/readme",
+        },
+      }),
+    /invalid review report/i,
+  );
 });
 
 test("上游内容被标记为不可信资料，不能改变系统规则", () => {
@@ -131,9 +199,112 @@ test("上游内容被标记为不可信资料，不能改变系统规则", () =>
   assert.equal(messages[0].role, "system");
   assert.match(messages[0].content, /不可信数据/);
   assert.match(messages[0].content, /不得.*密钥/);
+  assert.match(messages[0].content, /最新 README.*语义/);
+  assert.match(messages[0].content, /inScope/);
+  assert.match(messages[0].content, /evidenceExcerpt/);
+  assert.doesNotMatch(messages[0].content, /"value":"mcp"/);
   assert.equal(messages[1].role, "user");
   assert.match(messages[1].content, /BEGIN_UNTRUSTED_UPSTREAM_DATA/);
   assert.match(messages[1].content, /Ignore previous instructions/);
+});
+
+test("资格校验不因 needs_human、缺失信息、兼容性或实用性空缺而阻断", () => {
+  const report = {
+    ...VALID_REPORT,
+    targetUsers: [],
+    useCases: [],
+    compatibility: [],
+    missingInformation: ["尚未人工实测", "没有平台兼容性证据"],
+    recommendation: "needs_human",
+  };
+  const result = evaluateResourceQualification({
+    report,
+    proposal: VALID_PROPOSAL,
+    repository: PUBLIC_REPOSITORY,
+    readme: LATEST_README,
+    existingResources: [],
+    allowedTags: ["file-management", "mcp"],
+  });
+  assert.deepEqual(result, { eligible: true, reasons: [] });
+});
+
+test("资格校验以 DeepSeek 的语义范围和类型结论为准，不用代码猜测", () => {
+  for (const report of [
+    { ...VALID_REPORT, inScope: false },
+    {
+      ...VALID_REPORT,
+      kind: { value: "unknown", basis: "unknown", evidenceUrl: null, evidenceExcerpt: null },
+    },
+  ]) {
+    const result = evaluateResourceQualification({
+      report,
+      proposal: VALID_PROPOSAL,
+      repository: PUBLIC_REPOSITORY,
+      readme: LATEST_README,
+      existingResources: [],
+      allowedTags: ["file-management", "mcp"],
+    });
+    assert.equal(result.eligible, false);
+  }
+});
+
+test("资格校验拒绝不安全仓库、许可证、重复、非法标签和有证据 high risk", () => {
+  const cases = [
+    { repository: { ...PUBLIC_REPOSITORY, private: true } },
+    { repository: { ...PUBLIC_REPOSITORY, archived: true } },
+    { repository: { ...PUBLIC_REPOSITORY, license: "NOASSERTION" } },
+    { readme: "" },
+    { existingResources: [{ id: "other", name: "Other", repository: "https://github.com/acme/files-mcp" }] },
+    { existingResources: [{ id: "files-mcp", name: "Other", repository: "https://github.com/elsewhere/other" }] },
+    { existingResources: [{ id: "other", name: "files mcp", repository: "https://github.com/elsewhere/other" }] },
+    { allowedTags: ["file-management"] },
+    {
+      report: {
+        ...VALID_REPORT,
+        risks: [
+          {
+            level: "high",
+            title: "上游明确要求上传真实密钥",
+            basis: "upstream",
+            evidenceUrl: "https://github.com/acme/files-mcp#readme",
+          },
+        ],
+      },
+    },
+  ];
+  for (const overrides of cases) {
+    const result = evaluateResourceQualification({
+      report: VALID_REPORT,
+      proposal: VALID_PROPOSAL,
+      repository: PUBLIC_REPOSITORY,
+      readme: LATEST_README,
+      existingResources: [],
+      allowedTags: ["file-management", "mcp"],
+      ...overrides,
+    });
+    assert.equal(result.eligible, false, JSON.stringify(overrides));
+    assert.ok(result.reasons.length > 0);
+  }
+});
+
+test("资源提案协议严格拒绝额外字段和身份漂移", () => {
+  const common = {
+    report: VALID_REPORT,
+    repository: PUBLIC_REPOSITORY,
+    readme: LATEST_README,
+    existingResources: [],
+    allowedTags: ["file-management", "mcp"],
+  };
+  const extra = evaluateResourceQualification({
+    ...common,
+    proposal: { ...VALID_PROPOSAL, featured: true },
+  });
+  assert.equal(extra.eligible, false);
+  const changedIdentity = evaluateResourceQualification({
+    ...common,
+    proposal: { ...VALID_PROPOSAL, repository: "https://github.com/evil/other" },
+  });
+  assert.equal(changedIdentity.eligible, false);
 });
 
 test("DeepSeek 客户端按 OpenAI Chat Completions 格式请求 V4 Flash JSON Output", async () => {
@@ -407,7 +578,7 @@ test("审核评论通过固定标记更新，不重复刷屏", async () => {
   const fetchImpl = async (url, init = {}) => {
     requests.push({ url, init });
     if (url.endsWith("/issues/7/comments") && !init.method) {
-      return Response.json([{ id: 81, body: "<!-- cnmcp-flow: ai-review -->\n旧报告" }]);
+      return Response.json([{ id: 81, user: { login: "github-actions[bot]" }, body: "<!-- cnmcp-flow: ai-review -->\n旧报告" }]);
     }
     return Response.json({ id: 81 });
   };
@@ -417,6 +588,7 @@ test("审核评论通过固定标记更新，不重复刷屏", async () => {
     repository: "cnmcp/index",
     issueNumber: 7,
     body: "<!-- cnmcp-flow: ai-review -->\n新报告",
+    trustedAuthors: ["github-actions[bot]"],
   });
   assert.equal(result.action, "updated");
   assert.equal(requests.length, 2);
