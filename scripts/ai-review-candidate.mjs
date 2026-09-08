@@ -73,6 +73,45 @@ function automationResult(body, { eligible, reasons }) {
   return lines.join("\n");
 }
 
+function addUsage(total, usage) {
+  return {
+    inputTokens: total.inputTokens + (usage?.inputTokens ?? 0),
+    outputTokens: total.outputTokens + (usage?.outputTokens ?? 0),
+    totalTokens: total.totalTokens + (usage?.totalTokens ?? 0),
+  };
+}
+
+export async function completeValidatedReview({ client, messages, readme, candidate, maxValidationAttempts = 2 }) {
+  let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  let lastError;
+  for (let attempt = 1; attempt <= maxValidationAttempts; attempt += 1) {
+    const retryMessage = attempt === 1 ? [] : [{
+      role: "user",
+      content: [
+        "上一份 JSON 未通过结构校验，请丢弃并重新生成完整 JSON。",
+        `校验错误：${String(lastError?.message ?? "invalid review report").slice(0, 1800)}`,
+        "kind.value 只能是 mcp、skill、plugin、unknown。",
+        "useCases 每项只能包含 value、basis、evidenceUrl。",
+        "compatibility 每项必须且只能包含 platform、status、basis、evidenceUrl、note；证据不足可返回空数组。",
+        "不要增加任何字段，不要输出 Markdown。",
+      ].join("\n"),
+    }];
+    const result = await client.complete([...messages, ...retryMessage]);
+    usage = addUsage(usage, result.usage);
+    try {
+      const report = validateReviewReport(result.report, { readme });
+      if (report.candidateId !== candidate.candidateId || report.repository !== candidate.repository) {
+        throw new Error("Invalid review report: candidate identity changed by model");
+      }
+      return { report, usage, validationAttempts: attempt };
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxValidationAttempts) throw error;
+    }
+  }
+  throw lastError;
+}
+
 export async function runCandidateReview({ fetchImpl = globalThis.fetch, now = () => new Date() } = {}) {
   const startedAt = Date.now();
   const githubToken = required("GITHUB_TOKEN");
@@ -156,11 +195,13 @@ export async function runCandidateReview({ fetchImpl = globalThis.fetch, now = (
       maxTokens: Number.parseInt(process.env.AI_REVIEW_MAX_TOKENS || "6000", 10),
       maxAttempts: Number.parseInt(process.env.AI_REVIEW_MAX_ATTEMPTS || "2", 10),
     });
-    const result = await client.complete(buildReviewMessages({ candidate, ...sources, allowedTags }));
-    const report = validateReviewReport(result.report, { readme: sources.readme });
-    if (report.candidateId !== candidate.candidateId || report.repository !== candidate.repository) {
-      throw new Error("Invalid review report: candidate identity changed by model");
-    }
+    const result = await completeValidatedReview({
+      client,
+      messages: buildReviewMessages({ candidate, ...sources, allowedTags }),
+      readme: sources.readme,
+      candidate,
+    });
+    const report = result.report;
     usage = result.usage;
     recommendation = report.recommendation;
     const proposal = buildResourceProposal({ report, repository: sources.repository });

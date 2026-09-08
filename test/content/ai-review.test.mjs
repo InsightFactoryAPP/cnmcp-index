@@ -11,6 +11,7 @@ import {
 import { evaluateResourceQualification } from "../../scripts/lib/ai-resource-qualification.mjs";
 import { createDeepSeekClient } from "../../scripts/lib/deepseek-client.mjs";
 import { upsertReviewComment } from "../../scripts/lib/github-ai-review.mjs";
+import { completeValidatedReview } from "../../scripts/ai-review-candidate.mjs";
 
 const ISSUE_BODY = `## 自动发现候选
 
@@ -206,6 +207,35 @@ test("上游内容被标记为不可信资料，不能改变系统规则", () =>
   assert.equal(messages[1].role, "user");
   assert.match(messages[1].content, /BEGIN_UNTRUSTED_UPSTREAM_DATA/);
   assert.match(messages[1].content, /Ignore previous instructions/);
+});
+
+test("模型首次返回错误字段时按 Schema 反馈自动修正一次", async () => {
+  const calls = [];
+  const malformed = {
+    ...VALID_REPORT,
+    kind: { ...VALID_REPORT.kind, value: "agent" },
+    useCases: [{ title: "文件访问", description: "读取文件" }],
+    compatibility: [{ name: "codex" }],
+  };
+  const client = {
+    async complete(messages) {
+      calls.push(messages);
+      return calls.length === 1
+        ? { report: malformed, usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } }
+        : { report: VALID_REPORT, usage: { inputTokens: 12, outputTokens: 22, totalTokens: 34 } };
+    },
+  };
+  const result = await completeValidatedReview({
+    client,
+    messages: [{ role: "system", content: "schema" }],
+    readme: LATEST_README,
+    candidate: { candidateId: VALID_REPORT.candidateId, repository: VALID_REPORT.repository },
+  });
+  assert.equal(result.report, VALID_REPORT);
+  assert.equal(result.validationAttempts, 2);
+  assert.deepEqual(result.usage, { inputTokens: 22, outputTokens: 42, totalTokens: 64 });
+  assert.match(calls[1].at(-1).content, /kind\.value.*mcp.*skill.*plugin.*unknown/);
+  assert.match(calls[1].at(-1).content, /compatibility.*platform.*status/);
 });
 
 test("资格校验不因 needs_human、缺失信息、兼容性或实用性空缺而阻断", () => {
