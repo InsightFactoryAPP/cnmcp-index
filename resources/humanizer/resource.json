@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "humanizer",
+  "kind": "skill",
+  "name": "humanizer",
+  "summary": "Humanizer 是一个 Agent Skill，用于将带有 AI 写作痕迹的文本改写为更像真人书写，同时保留原意。它基于维基百科的 AI 写作特征清单，定义了 25 种模式，并在改写时避免编造事实。",
+  "repository": "https://github.com/blader/humanizer",
+  "license": "MIT",
+  "author": {
+    "name": "blader",
+    "url": "https://github.com/blader"
+  },
+  "tags": [
+    "writing",
+    "content-creator"
+  ],
+  "createdAt": "2026-09-08",
+  "visibility": "public"
+}
