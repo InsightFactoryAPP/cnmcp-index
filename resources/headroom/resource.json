@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "headroom",
+  "kind": "plugin",
+  "name": "headroom",
+  "summary": "Headroom 是一个上下文压缩层，用于在工具输出、日志、文件、RAG 分块和对话历史到达 LLM 之前对其进行压缩，从而显著减少 token 消耗，同时保持答案质量。它提供库、代理、MCP 服务器和跨代理内存等功能，支持通过 wrap 命令集成多种 AI 编码工具。",
+  "repository": "https://github.com/headroomlabs-ai/headroom",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "headroomlabs-ai",
+    "url": "https://github.com/headroomlabs-ai"
+  },
+  "tags": [
+    "developer",
+    "software-engineering",
+    "automation",
+    "context",
+    "productivity"
+  ],
+  "createdAt": "2026-09-09",
+  "visibility": "public"
+}
