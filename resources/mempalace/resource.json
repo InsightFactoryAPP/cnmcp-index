@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "mempalace",
+  "kind": "mcp",
+  "name": "mempalace",
+  "summary": "MemPalace 是一个本地优先的 AI 记忆系统，把对话历史原文存储并按语义检索，提供可插拔向量后端、知识图谱、自动保存钩子，并暴露 45 个 MCP 工具供编码智能体读写记忆。",
+  "repository": "https://github.com/mempalace/mempalace",
+  "license": "MIT",
+  "author": {
+    "name": "MemPalace",
+    "url": "https://github.com/MemPalace"
+  },
+  "tags": [
+    "memory",
+    "local-first",
+    "context",
+    "knowledge-graph",
+    "automation",
+    "developer"
+  ],
+  "createdAt": "2026-09-10",
+  "visibility": "public"
+}
