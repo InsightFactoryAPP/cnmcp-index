@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "yylo-skills",
+  "kind": "skill",
+  "name": "YYLO 技能包",
+  "nameEn": "YYLO Agent Skills",
+  "summary": "YYLO 官方维护的 Agent 技能包：7 个技能覆盖 Ledger 看板任务管理、PDR 计划与任务拆解、Ralph 单任务执行循环、项目结构理解、Wiki 知识维护、工作流记录与凭证产物管理。可独立配合 YYLO Ledger 使用，计划与执行技能依赖 YYLO CLI 编排，一行 npx skills add 即可安装到 Claude Code 与 Codex。",
+  "summaryEn": "Agent skill pack maintained by YYLO: seven skills covering Ledger Kanban task management, PDR planning and task breakdown, the Ralph single-task loop, project understanding, wiki knowledge, workflow records, and provenance-bound artifacts; planning and execution skills rely on YYLO CLI.",
+  "repository": "https://github.com/yylo-dev/yylo-skills",
+  "homepage": "https://yylo.dev",
+  "documentation": "https://github.com/yylo-dev/yylo-skills#readme",
+  "license": "MIT",
+  "author": {
+    "name": "yylo-dev",
+    "url": "https://github.com/yylo-dev"
+  },
+  "tags": [
+    "developer",
+    "software-engineering",
+    "project-management",
+    "planning",
+    "automation"
+  ],
+  "compatibility": [
+    {
+      "platform": "claude-code",
+      "status": "supported",
+      "verifiedAt": "2026-09-11",
+      "note": "上游 README 提供官方安装命令 npx skills add yylo-dev/yylo-skills -a claude-code，将技能复制进 Claude Code 技能目录。",
+      "evidenceUrl": "https://github.com/yylo-dev/yylo-skills#readme"
+    },
+    {
+      "platform": "codex",
+      "status": "supported",
+      "verifiedAt": "2026-09-11",
+      "note": "上游 README 同一官方命令支持 -a codex，可把全部 7 个技能安装为 Codex 技能。",
+      "evidenceUrl": "https://github.com/yylo-dev/yylo-skills#readme"
+    }
+  ],
+  "createdAt": "2026-09-08",
+  "visibility": "public"
+}
