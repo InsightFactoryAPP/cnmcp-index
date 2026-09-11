@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "context7",
+  "kind": "mcp",
+  "name": "context7",
+  "summary": "Context7 为 LLM 与 AI 代码编辑器提供最新、与版本对应的代码文档和示例，可直接注入提示上下文，减少过时回答与不存在的 API 幻觉。它支持两种接入方式：通过 ctx7 CLI 安装引导 agent 获取文档的 skill，或注册 Context7 MCP 服务器让 agent 原生调用文档工具。",
+  "repository": "https://github.com/upstash/context7",
+  "license": "MIT",
+  "author": {
+    "name": "upstash",
+    "url": "https://github.com/upstash"
+  },
+  "tags": [
+    "developer",
+    "software-engineering",
+    "documentation",
+    "context",
+    "automation"
+  ],
+  "createdAt": "2026-09-11",
+  "visibility": "public"
+}
